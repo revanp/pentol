@@ -17,9 +17,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	Version   = "0.1.0-v1"
-	BannerArt = `
+var Version = "0.1.0-dev"
+
+const BannerArt = `
   ██████╗ ███████╗███╗   ██╗████████╗ ██████╗ ██╗     
   ██╔══██╗██╔════╝████╗  ██║╚══██╔══╝██╔═══██╗██║     
   ██████╔╝█████╗  ██╔██╗ ██║   ██║   ██║   ██║██║     
@@ -28,7 +28,6 @@ const (
   ╚═╝     ╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚══════╝
    PENetration Testing tOOL — Phase V1 (Passive/Low-Risk)
 `
-)
 
 func main() {
 	rootCmd := &cobra.Command{
