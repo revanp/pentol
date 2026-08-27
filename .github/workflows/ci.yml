@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint (golangci-lint)
+    name: Lint & Code Quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -24,10 +24,14 @@ jobs:
           check-latest: true
           cache: true
 
-      - name: Install and Run golangci-lint
-        run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          golangci-lint run --timeout=5m
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: "latest"
+          install-go: false
 
   security:
     name: Vulnerability Check (govulncheck)
