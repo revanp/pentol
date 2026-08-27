@@ -19,18 +19,41 @@ var _ scanners.Scanner = (*ReconScanner)(nil)
 
 // ReconScanner performs passive, low-risk reconnaissance.
 type ReconScanner struct {
-	client     *http.Client
-	user_agent string
+	client    *http.Client
+	userAgent string
 }
 
-// NewReconScanner creates a new ReconScanner.
-func NewReconScanner() *ReconScanner {
-	return &ReconScanner{
+// Option configures ReconScanner.
+type Option func(*ReconScanner)
+
+// WithUserAgent sets a custom User-Agent for recon requests.
+func WithUserAgent(ua string) Option {
+	return func(s *ReconScanner) {
+		s.userAgent = ua
+	}
+}
+
+// WithRequestTimeout sets the per-request HTTP client timeout.
+func WithRequestTimeout(d time.Duration) Option {
+	return func(s *ReconScanner) {
+		if d > 0 {
+			s.client.Timeout = d
+		}
+	}
+}
+
+// NewReconScanner creates a new ReconScanner with optional configuration.
+func NewReconScanner(opts ...Option) *ReconScanner {
+	s := &ReconScanner{
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		user_agent: "Pentol-Security-Scanner/1.0",
+		userAgent: "Pentol-Security-Scanner/1.0",
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *ReconScanner) Name() string {
@@ -172,7 +195,7 @@ func (s *ReconScanner) checkRobotsTxt(ctx context.Context, target *model.Target)
 	if err != nil {
 		return findings
 	}
-	req.Header.Set("User-Agent", s.user_agent)
+	req.Header.Set("User-Agent", s.userAgent)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -252,7 +275,7 @@ func (s *ReconScanner) checkSitemapXml(ctx context.Context, target *model.Target
 	if err != nil {
 		return findings
 	}
-	req.Header.Set("User-Agent", s.user_agent)
+	req.Header.Set("User-Agent", s.userAgent)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -293,7 +316,7 @@ func (s *ReconScanner) checkTechnologyFingerprint(ctx context.Context, target *m
 	if err != nil {
 		return findings
 	}
-	req.Header.Set("User-Agent", s.user_agent)
+	req.Header.Set("User-Agent", s.userAgent)
 
 	resp, err := s.client.Do(req)
 	if err != nil {

@@ -197,6 +197,11 @@ Example:
 				}
 			}
 
+			// Respect NO_COLOR env var standard (https://no-color.org)
+			if _, ok := os.LookupEnv("NO_COLOR"); ok {
+				noColor = true
+			}
+
 			// Select Reporter
 			var rep report.Reporter
 			switch strings.ToLower(formatStr) {

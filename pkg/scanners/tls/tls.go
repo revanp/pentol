@@ -201,7 +201,7 @@ func (s *TLSScanner) checkProtocolVersions(ctx context.Context, addr, serverName
 	var findings []*model.Finding
 
 	// Check TLS 1.0 (Deprecated by RFC 8996)
-	if s.testTLSVersion(addr, serverName, tls.VersionTLS10) {
+	if s.testTLSVersion(ctx, addr, serverName, tls.VersionTLS10) {
 		findings = append(findings, model.NewFinding(
 			s.Name(),
 			"Deprecated TLS 1.0 Protocol Enabled",
@@ -220,7 +220,7 @@ func (s *TLSScanner) checkProtocolVersions(ctx context.Context, addr, serverName
 	}
 
 	// Check TLS 1.1 (Deprecated by RFC 8996)
-	if s.testTLSVersion(addr, serverName, tls.VersionTLS11) {
+	if s.testTLSVersion(ctx, addr, serverName, tls.VersionTLS11) {
 		findings = append(findings, model.NewFinding(
 			s.Name(),
 			"Deprecated TLS 1.1 Protocol Enabled",
@@ -241,19 +241,26 @@ func (s *TLSScanner) checkProtocolVersions(ctx context.Context, addr, serverName
 }
 
 // testTLSVersion probes if a specific TLS version is supported by forcing MinVersion & MaxVersion.
-func (s *TLSScanner) testTLSVersion(addr, serverName string, version uint16) bool {
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	config := &tls.Config{
+// Context is propagated so that SIGINT or a scan timeout will abort the probe promptly.
+func (s *TLSScanner) testTLSVersion(ctx context.Context, addr, serverName string, version uint16) bool {
+	dialer := &net.Dialer{}
+	tlsCfg := &tls.Config{
 		ServerName:         serverName,
 		MinVersion:         version,
 		MaxVersion:         version,
 		InsecureSkipVerify: true, //nolint:gosec // Needed for passive protocol probing
 	}
 
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, config)
+	// Use DialContext so the context deadline / cancellation is respected.
+	netConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false
 	}
+	conn := tls.Client(netConn, tlsCfg)
 	defer conn.Close()
+
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return false
+	}
 	return conn.ConnectionState().Version == version
 }

@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"pentol/pkg/model"
@@ -42,6 +41,7 @@ func NewOrchestrator(cfg *ScanConfig, version string) (*Orchestrator, error) {
 		orc.scanners = append(orc.scanners, httpScanner.NewHTTPScanner(
 			httpScanner.WithUserAgent(cfg.UserAgent),
 			httpScanner.WithRateLimitDelay(cfg.RateLimitDelay),
+			httpScanner.WithRequestTimeout(cfg.RequestTimeout),
 			httpScanner.WithInsecureTLS(cfg.InsecureSkipTLS),
 		))
 	}
@@ -51,7 +51,10 @@ func NewOrchestrator(cfg *ScanConfig, version string) (*Orchestrator, error) {
 	}
 
 	if cfg.EnableRecon {
-		orc.scanners = append(orc.scanners, reconScanner.NewReconScanner())
+		orc.scanners = append(orc.scanners, reconScanner.NewReconScanner(
+			reconScanner.WithUserAgent(cfg.UserAgent),
+			reconScanner.WithRequestTimeout(cfg.RequestTimeout),
+		))
 	}
 
 	return orc, nil
@@ -71,11 +74,10 @@ func (o *Orchestrator) Execute(ctx context.Context, cb ProgressCallback) (*model
 	result.Metadata["safe_mode"] = fmt.Sprintf("%v", o.config.SafeMode)
 	result.Metadata["user_agent"] = o.config.UserAgent
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	// Rate limiter channel
-	limiter := time.Tick(o.config.RateLimitDelay)
+	// Rate limiter: use NewTicker so it can be properly stopped and GC'd.
+	// This throttles the gap between scanners; per-request delays are handled inside each scanner.
+	ticker := time.NewTicker(o.config.RateLimitDelay)
+	defer ticker.Stop()
 
 	for _, s := range o.scanners {
 		select {
@@ -97,15 +99,11 @@ func (o *Orchestrator) Execute(ctx context.Context, cb ProgressCallback) (*model
 		}
 
 		count := 0
-		if findings != nil {
-			for _, f := range findings {
-				if f != nil {
-					_ = f.Validate()
-					mu.Lock()
-					result.AddFinding(f)
-					mu.Unlock()
-					count++
-				}
+		for _, f := range findings {
+			if f != nil {
+				_ = f.Validate()
+				result.AddFinding(f)
+				count++
 			}
 		}
 
@@ -113,22 +111,25 @@ func (o *Orchestrator) Execute(ctx context.Context, cb ProgressCallback) (*model
 			cb(s.Name(), "COMPLETED", count)
 		}
 
-		// Wait safe rate limit delay before starting next scanner
-		<-limiter
+		// Wait safe rate limit delay before starting next scanner.
+		// Also respect context cancellation so SIGINT exits promptly.
+		select {
+		case <-ctx.Done():
+			result.Finalize()
+			return result, nil
+		case <-ticker.C:
+		}
 	}
 
-	_ = wg
 	result.Finalize()
 	return result, nil
 }
 
 // verifySafety enforces safe scanning policies.
 func (o *Orchestrator) verifySafety() error {
-	// Check scope
 	inScope, reason := o.config.Scope.IsInScope(o.config.Target.URL)
 	if !inScope {
 		return fmt.Errorf("target %s violates defined scope: %s", o.config.Target.URL, reason)
 	}
-
 	return nil
 }

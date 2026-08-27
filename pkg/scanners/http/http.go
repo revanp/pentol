@@ -20,9 +20,9 @@ var _ scanners.Scanner = (*HTTPScanner)(nil)
 
 // HTTPScanner performs passive and low-risk HTTP security checks.
 type HTTPScanner struct {
-	client     *http.Client
-	user_agent string
-	delay      time.Duration
+	client    *http.Client
+	userAgent string
+	delay     time.Duration
 }
 
 // Option configures HTTPScanner.
@@ -31,7 +31,7 @@ type Option func(*HTTPScanner)
 // WithUserAgent sets a custom User-Agent.
 func WithUserAgent(ua string) Option {
 	return func(s *HTTPScanner) {
-		s.user_agent = ua
+		s.userAgent = ua
 	}
 }
 
@@ -42,11 +42,21 @@ func WithRateLimitDelay(d time.Duration) Option {
 	}
 }
 
+// WithRequestTimeout sets the per-request HTTP client timeout.
+func WithRequestTimeout(d time.Duration) Option {
+	return func(s *HTTPScanner) {
+		if d > 0 {
+			s.client.Timeout = d
+		}
+	}
+}
+
 // WithInsecureTLS configures client to skip certificate verification if testing broken TLS endpoints.
+// Only the InsecureSkipVerify field is changed; MinVersion and other settings are preserved.
 func WithInsecureTLS(insecure bool) Option {
 	return func(s *HTTPScanner) {
 		if transport, ok := s.client.Transport.(*http.Transport); ok {
-			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec
+			transport.TLSClientConfig.InsecureSkipVerify = insecure //nolint:gosec
 		}
 	}
 }
@@ -77,8 +87,8 @@ func NewHTTPScanner(opts ...Option) *HTTPScanner {
 				return http.ErrUseLastResponse
 			},
 		},
-		user_agent: "Pentol-Security-Scanner/1.0",
-		delay:      100 * time.Millisecond,
+		userAgent: "Pentol-Security-Scanner/1.0",
+		delay:     100 * time.Millisecond,
 	}
 
 	for _, opt := range opts {
@@ -114,7 +124,7 @@ func (s *HTTPScanner) Run(ctx context.Context, target *model.Target, scope *mode
 	if err != nil {
 		return findings, fmt.Errorf("failed to create baseline request: %w", err)
 	}
-	req.Header.Set("User-Agent", s.user_agent)
+	req.Header.Set("User-Agent", s.userAgent)
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := s.client.Do(req)
@@ -160,7 +170,7 @@ func (s *HTTPScanner) checkHTTPSRedirection(ctx context.Context, target *model.T
 	if err != nil {
 		return findings
 	}
-	req.Header.Set("User-Agent", s.user_agent)
+	req.Header.Set("User-Agent", s.userAgent)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -539,27 +549,27 @@ func (s *HTTPScanner) checkHTTPMethods(ctx context.Context, target *model.Target
 	// 1. Check TRACE method (Cross-Site Tracing)
 	traceReq, err := http.NewRequestWithContext(ctx, "TRACE", target.URL, nil)
 	if err == nil {
-		traceReq.Header.Set("User-Agent", s.user_agent)
+		traceReq.Header.Set("User-Agent", s.userAgent)
 		traceReq.Header.Set("X-Pentol-Check", "test")
 		traceResp, err := s.client.Do(traceReq)
 		if err == nil {
-			defer traceResp.Body.Close()
-			if traceResp.StatusCode == http.StatusOK {
-				bodyBytes, _ := io.ReadAll(io.LimitReader(traceResp.Body, 1024))
-				if strings.Contains(string(bodyBytes), "X-Pentol-Check") {
-					findings = append(findings, model.NewFinding(
-						s.Name(),
-						"HTTP TRACE / TRACK Method Enabled (XST Risk)",
-						model.SeverityHigh,
-						target.URL,
-						"/",
-						"The web server responds to HTTP TRACE requests by echoing request headers.",
-						fmt.Sprintf("TRACE request returned HTTP %d echoing headers.", traceResp.StatusCode),
-						"Can be leveraged in Cross-Site Tracing (XST) attacks to steal HttpOnly cookies and authorization tokens.",
-						"Disable TRACE and TRACK methods on the web server (e.g., 'TraceEnable off' in Apache).",
-						[]string{"https://owasp.org/www-community/attacks/Cross_Site_Tracing"},
-					))
-				}
+			// Read body and close immediately — do NOT defer inside a non-loop function that closes early.
+			bodyBytes, _ := io.ReadAll(io.LimitReader(traceResp.Body, 1024))
+			traceResp.Body.Close()
+
+			if traceResp.StatusCode == http.StatusOK && strings.Contains(string(bodyBytes), "X-Pentol-Check") {
+				findings = append(findings, model.NewFinding(
+					s.Name(),
+					"HTTP TRACE / TRACK Method Enabled (XST Risk)",
+					model.SeverityHigh,
+					target.URL,
+					"/",
+					"The web server responds to HTTP TRACE requests by echoing request headers.",
+					fmt.Sprintf("TRACE request returned HTTP %d echoing headers.", traceResp.StatusCode),
+					"Can be leveraged in Cross-Site Tracing (XST) attacks to steal HttpOnly cookies and authorization tokens.",
+					"Disable TRACE and TRACK methods on the web server (e.g., 'TraceEnable off' in Apache).",
+					[]string{"https://owasp.org/www-community/attacks/Cross_Site_Tracing"},
+				))
 			}
 		}
 	}
@@ -567,11 +577,12 @@ func (s *HTTPScanner) checkHTTPMethods(ctx context.Context, target *model.Target
 	// 2. Check OPTIONS method to see allowed methods
 	optionsReq, err := http.NewRequestWithContext(ctx, http.MethodOptions, target.URL, nil)
 	if err == nil {
-		optionsReq.Header.Set("User-Agent", s.user_agent)
+		optionsReq.Header.Set("User-Agent", s.userAgent)
 		optionsResp, err := s.client.Do(optionsReq)
 		if err == nil {
-			defer optionsResp.Body.Close()
 			allow := optionsResp.Header.Get("Allow")
+			optionsResp.Body.Close() // close immediately; headers already read
+
 			if allow != "" {
 				upperAllow := strings.ToUpper(allow)
 				if strings.Contains(upperAllow, "PUT") || strings.Contains(upperAllow, "DELETE") {
