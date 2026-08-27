@@ -2,8 +2,11 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,6 +27,23 @@ jobs:
           go-version: 'stable'
           check-latest: true
           cache: true
+
+      - name: Ensure Git Tag for Release
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            TAG="v0.1.0"
+          else
+            TAG=$(echo "$LATEST_TAG" | awk -F. -v OFS=. '{$NF = $NF + 1; print}')
+          fi
+          if ! git describe --exact-match --tags HEAD 2>/dev/null; then
+            echo "Creating tag $TAG for commit ${{ github.sha }}"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Automated release $TAG"
+            git push origin "$TAG" || true
+          fi
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
